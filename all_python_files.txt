@@ -1,0 +1,2234 @@
+./backend/app/core/config.py
+import os
+from functools import lru_cache
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
+
+
+class Settings:
+    def __init__(self) -> None:
+        self.database_url = os.getenv("DATABASE_URL", "sqlite:///./papers.db")
+        self.database_echo = os.getenv("DATABASE_ECHO", "0") == "1"
+        self.hf_daily_url = os.getenv(
+            "HF_DAILY_URL", "https://huggingface.co/papers/date/"
+        )
+        self.request_timeout = float(os.getenv("REQUEST_TIMEOUT", "20"))
+        self.user_agent = os.getenv(
+            "REQUEST_USER_AGENT",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+        )
+        self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        self.deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        self.breakthrough_threshold = float(os.getenv("BREAKTHROUGH_THRESHOLD", "0.7"))
+        self.tracked_institutions = {
+            item.strip().lower()
+            for item in os.getenv(
+                "INSTITUTION_WHITELIST",
+                "ai2,allen institute for ai,anthropic,openai,google deepmind,deepseek,meta ai,meta fair",
+            ).split(",")
+            if item.strip()
+        }
+
+        # Email/Brevo settings
+        self.brevo_api_key = os.getenv("BREVO_API_KEY")
+        self.email_from_address = os.getenv("EMAIL_FROM_ADDRESS", "noreply@yourdomain.com")
+        self.email_from_name = os.getenv("EMAIL_FROM_NAME", "Daily Paper Insights")
+        self.frontend_url = os.getenv("FRONTEND_URL", "http://localhost:8000")
+        self.daily_digest_hour = int(os.getenv("DAILY_DIGEST_HOUR", "8"))  # Default: 8 AM
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()
+--------------
+./backend/app/__init__.py
+from .main import app
+
+__all__ = ["app"]
+--------------
+./backend/app/models/__init__.py
+from .entities import Finding, KeywordStat, Paper, Subscriber
+
+__all__ = ["Paper", "Finding", "KeywordStat", "Subscriber"]
+--------------
+./backend/app/models/entities.py
+# from __future__ import annotations
+
+# from typing import TYPE_CHECKING, List, Optional
+# from sqlmodel import SQLModel, Session, create_engine, select
+# from datetime import datetime
+# from typing import TYPE_CHECKING, List, Optional
+# from sqlalchemy import JSON, Column
+# from sqlmodel import Field, Relationship
+
+from sqlmodel import SQLModel, Session, create_engine, select
+from datetime import datetime
+from typing import List, Optional
+from sqlalchemy import Column, JSON
+from sqlmodel import Field, Relationship
+# # from sqlalchemy.orm import Mapped
+# from datetime import datetime
+# from sqlmodel import Field, Relationship, SQLModel
+# from sqlmodel import SQLModel
+
+
+# if TYPE_CHECKING:
+#     pass
+
+
+class Paper(SQLModel, table=True):
+    __tablename__ = "paper"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    arxiv_id: str = Field(index=True, unique=True)
+    title: str
+    authors: List[str] = Field(sa_column=Column(JSON, nullable=False, default=[]))
+    institutions: List[str] = Field(sa_column=Column(JSON, nullable=False, default=[]))
+    abstract: Optional[str] = None
+    source_url: Optional[str] = None
+    published_at: Optional[datetime] = Field(default=None, index=True)
+    hf_listing_date: Optional[str] = Field(default=None, index=True)
+    html_source: Optional[str] = None
+    pdf_source_path: Optional[str] = None
+    problem_summary: Optional[str] = None
+    solution_summary: Optional[str] = None
+    effect_summary: Optional[str] = None
+    keywords: List[str] = Field(sa_column=Column(JSON, nullable=False, default=[]))
+    breakthrough_score: Optional[float] = Field(default=None, index=True)
+    breakthrough_label: Optional[bool] = Field(default=False, index=True)
+    breakthrough_reason: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_version: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    findings: List["Finding"] = Relationship(back_populates="paper")
+
+
+class Finding(SQLModel, table=True):
+    __tablename__ = "finding"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    paper_id: int = Field(foreign_key="paper.id", index=True)
+    claim_text: str
+    experiment_design: Optional[str] = None
+    evidence_snippet: Optional[str] = None
+    metrics: List[str] = Field(sa_column=Column(JSON, nullable=False, default=[]))
+    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+    paper: Optional[Paper] = Relationship(back_populates="findings")
+
+
+class KeywordStat(SQLModel, table=True):
+    __tablename__ = "keywordstat"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    keyword: str = Field(index=True)
+    paper_count: int = Field(default=0)
+    last_seen_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Subscriber(SQLModel, table=True):
+    __tablename__ = "subscriber"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(index=True, unique=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    verified: bool = Field(default=False, index=True)
+    verify_token: Optional[str] = Field(default=None, index=True)--------------
+./backend/app/db/session.py
+from contextlib import contextmanager
+from typing import Generator
+
+from sqlmodel import Session, SQLModel, create_engine
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    echo=settings.database_echo,
+    connect_args={"check_same_thread": False}
+    if settings.database_url.startswith("sqlite")
+    else {},
+)
+
+
+def init_db() -> None:
+    SQLModel.metadata.create_all(engine)
+
+
+@contextmanager
+def session_scope() -> Generator[Session, None, None]:
+    session = Session(engine)
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_session() -> Generator[Session, None, None]:
+    with session_scope() as session:
+        yield session
+--------------
+./backend/app/api/deps.py
+from typing import Generator
+
+from sqlmodel import Session
+
+from app.db.session import get_session
+
+
+def get_db() -> Generator[Session, None, None]:
+    yield from get_session()
+--------------
+./backend/app/api/schemas.py
+from datetime import datetime
+from typing import List, Optional
+
+from pydantic import BaseModel, EmailStr
+
+
+class MetricSchema(BaseModel):
+    name: str
+    dataset: Optional[str] = None
+    value: Optional[float | str] = None
+    unit: Optional[str] = None
+    baseline: Optional[float | str] = None
+    delta: Optional[float | str] = None
+    raw: Optional[str] = None
+
+
+class FindingSchema(BaseModel):
+    id: int
+    claim_text: str
+    experiment_design: Optional[str]
+    evidence_snippet: Optional[str]
+    metrics: List[MetricSchema] = []
+
+
+class PaperSummarySchema(BaseModel):
+    id: int
+    arxiv_id: str
+    title: str
+    authors: List[str]
+    institutions: List[str]
+    published_at: Optional[datetime]
+    hf_listing_date: Optional[str]
+    abstract: Optional[str]
+    problem_summary: Optional[str]
+    solution_summary: Optional[str]
+    effect_summary: Optional[str]
+    keywords: List[str]
+    breakthrough_score: Optional[float]
+    breakthrough_label: Optional[bool]
+    breakthrough_reason: Optional[str]
+    findings: List[FindingSchema] = []
+
+
+class KeywordStatSchema(BaseModel):
+    keyword: str
+    paper_count: int
+    last_seen_at: datetime
+
+
+class SubscriberCreateSchema(BaseModel):
+    email: EmailStr
+
+
+class SubscriberResponseSchema(BaseModel):
+    email: EmailStr
+    verified: bool
+    created_at: datetime
+--------------
+./backend/app/api/routes/papers.py
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlmodel import Session, select
+
+from app.api.deps import get_db
+from app.api.schemas import FindingSchema, PaperSummarySchema
+from app.models import Paper
+
+router = APIRouter(tags=["papers"])
+
+
+def serialize_paper(paper: Paper) -> PaperSummarySchema:
+    return PaperSummarySchema(
+        id=paper.id,
+        arxiv_id=paper.arxiv_id,
+        title=paper.title,
+        authors=paper.authors,
+        institutions=paper.institutions,
+        published_at=paper.published_at,
+        hf_listing_date=paper.hf_listing_date,
+        abstract=paper.abstract,
+        problem_summary=paper.problem_summary,
+        solution_summary=paper.solution_summary,
+        effect_summary=paper.effect_summary,
+        keywords=paper.keywords,
+        breakthrough_score=paper.breakthrough_score,
+        breakthrough_label=paper.breakthrough_label,
+        breakthrough_reason=paper.breakthrough_reason,
+        findings=[
+            FindingSchema(
+                id=finding.id,
+                claim_text=finding.claim_text,
+                experiment_design=finding.experiment_design,
+                evidence_snippet=finding.evidence_snippet,
+                metrics=finding.metrics,
+            )
+            for finding in paper.findings
+        ],
+    )
+
+
+@router.get("/papers/calendar", response_model=List[str])
+def list_available_dates(db: Session = Depends(get_db)) -> List[str]:
+    """获取所有有数据的日期列表 (必须在 /papers/{paper_id} 之前定义)"""
+    statement = (
+        select(Paper.hf_listing_date)
+        .where(Paper.hf_listing_date.is_not(None))
+        .group_by(Paper.hf_listing_date)
+        .order_by(Paper.hf_listing_date.desc())
+    )
+    results = db.exec(statement).all()
+    normalized: List[str] = []
+    for value in results:
+        if not value:
+            continue
+        text = value if isinstance(value, str) else str(value)
+        # 确保返回标准的 YYYY-MM-DD 格式
+        normalized.append(text[:10])
+    # ensure unique while preserving order
+    seen = set()
+    deduped: List[str] = []
+    for item in normalized:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
+
+
+@router.get("/papers", response_model=List[PaperSummarySchema])
+def list_papers(
+    *,
+    db: Session = Depends(get_db),
+    target_date: Optional[str] = Query(None, description="Filter by ingest date (YYYY-MM-DD)"),
+    breakthrough_only: bool = Query(False),
+    limit: int = Query(20, ge=1, le=100),
+) -> List[PaperSummarySchema]:
+    statement = select(Paper).order_by(Paper.hf_listing_date.desc(), Paper.id.desc())
+    if target_date:
+        # 标准化日期格式,只取前10个字符 YYYY-MM-DD
+        normalized_date = target_date[:10] if len(target_date) >= 10 else target_date
+        statement = statement.where(Paper.hf_listing_date == normalized_date)
+    if breakthrough_only:
+        statement = statement.where(Paper.breakthrough_label.is_(True))
+    papers = db.exec(statement.limit(limit)).all()
+    return [serialize_paper(paper) for paper in papers]
+
+
+@router.get("/papers/{paper_id}", response_model=PaperSummarySchema)
+def get_paper(paper_id: int, db: Session = Depends(get_db)) -> PaperSummarySchema:
+    paper = db.get(Paper, paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    # load findings relationship explicitly if lazy
+    _ = paper.findings  # type: ignore[attr-defined]
+    return serialize_paper(paper)
+--------------
+./backend/app/api/routes/keywords.py
+from typing import List
+
+from fastapi import APIRouter, Depends, Query
+from sqlmodel import Session, select
+
+from app.api.deps import get_db
+from app.api.schemas import KeywordStatSchema
+from app.models import KeywordStat
+
+router = APIRouter(prefix="/keywords", tags=["keywords"])
+
+
+@router.get("/stats", response_model=List[KeywordStatSchema])
+def keyword_stats(
+    *,
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+) -> List[KeywordStatSchema]:
+    statement = select(KeywordStat).order_by(KeywordStat.paper_count.desc()).limit(limit)
+    result = db.exec(statement).all()
+    return [
+        KeywordStatSchema(
+            keyword=item.keyword,
+            paper_count=item.paper_count,
+            last_seen_at=item.last_seen_at,
+        )
+        for item in result
+    ]
+--------------
+./backend/app/api/routes/__init__.py
+from . import keywords, papers, subscribers
+
+__all__ = ["papers", "keywords", "subscribers"]
+--------------
+./backend/app/api/routes/subscribers.py
+import secrets
+from typing import Dict
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
+from sqlmodel import Session, select
+
+from app.api.deps import get_db
+from app.api.schemas import SubscriberCreateSchema, SubscriberResponseSchema
+from app.models import Subscriber
+from app.services.email_service import email_service
+
+router = APIRouter(prefix="/subscribers", tags=["subscribers"])
+
+
+@router.post("/", response_model=SubscriberResponseSchema, status_code=status.HTTP_201_CREATED)
+def create_subscriber(
+    payload: SubscriberCreateSchema,
+    db: Session = Depends(get_db),
+) -> SubscriberResponseSchema:
+    """Create a new subscriber and send verification email"""
+    existing = db.exec(select(Subscriber).where(Subscriber.email == payload.email)).first()
+    if existing:
+        if existing.verified:
+            raise HTTPException(status_code=400, detail="Email already subscribed and verified")
+        else:
+            # Resend verification email for unverified subscriber
+            email_service.send_verification_email(existing.email, existing.verify_token)
+            return SubscriberResponseSchema(
+                email=existing.email,
+                verified=existing.verified,
+                created_at=existing.created_at,
+            )
+
+    token = secrets.token_urlsafe(32)
+    subscriber = Subscriber(email=payload.email, verify_token=token)
+    db.add(subscriber)
+    db.commit()
+    db.refresh(subscriber)
+
+    # Send verification email
+    email_sent = email_service.send_verification_email(subscriber.email, token)
+    if not email_sent:
+        # Note: We still create the subscriber even if email fails
+        # Admin can manually verify if needed
+        pass
+
+    return SubscriberResponseSchema(
+        email=subscriber.email,
+        verified=subscriber.verified,
+        created_at=subscriber.created_at,
+    )
+
+
+@router.get("/verify", response_class=HTMLResponse)
+def verify_email(
+    token: str = Query(..., description="Verification token from email"),
+    db: Session = Depends(get_db),
+) -> str:
+    """Verify subscriber email address via token"""
+    subscriber = db.exec(
+        select(Subscriber).where(Subscriber.verify_token == token)
+    ).first()
+
+    if not subscriber:
+        return """
+        <html>
+            <head><title>Verification Failed</title></head>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                <h1 style="color: #dc2626;">❌ Verification Failed</h1>
+                <p>Invalid or expired verification token.</p>
+            </body>
+        </html>
+        """
+
+    if subscriber.verified:
+        return """
+        <html>
+            <head><title>Already Verified</title></head>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                <h1 style="color: #059669;">✅ Already Verified</h1>
+                <p>This email address is already verified.</p>
+            </body>
+        </html>
+        """
+
+    # Mark as verified
+    subscriber.verified = True
+    db.commit()
+
+    return """
+    <html>
+        <head><title>Email Verified</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: #059669;">✅ Email Verified!</h1>
+            <p>Your subscription to Daily Paper Insights is now active.</p>
+            <p style="color: #666;">You'll receive your first digest soon.</p>
+        </body>
+    </html>
+    """
+
+
+@router.get("/unsubscribe", response_class=HTMLResponse)
+def unsubscribe(
+    token: str = Query(..., description="Unsubscribe token"),
+    db: Session = Depends(get_db),
+) -> str:
+    """Unsubscribe using token from email"""
+    # Token is the verify_token (we reuse it for unsubscribe)
+    subscriber = db.exec(
+        select(Subscriber).where(Subscriber.verify_token == token)
+    ).first()
+
+    if not subscriber:
+        return """
+        <html>
+            <head><title>Unsubscribe Failed</title></head>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                <h1 style="color: #dc2626;">❌ Unsubscribe Failed</h1>
+                <p>Invalid token. If you need help, please contact support.</p>
+            </body>
+        </html>
+        """
+
+    email = subscriber.email
+    db.delete(subscriber)
+    db.commit()
+
+    return f"""
+    <html>
+        <head><title>Unsubscribed</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: #059669;">👋 Unsubscribed</h1>
+            <p>You have been successfully unsubscribed from Daily Paper Insights.</p>
+            <p style="color: #666;">Email: {email}</p>
+            <p style="color: #666; margin-top: 30px;">
+                Changed your mind? You can always subscribe again later.
+            </p>
+        </body>
+    </html>
+    """
+
+
+@router.get("/", response_model=Dict[str, int])
+def subscriber_summary(db: Session = Depends(get_db)) -> Dict[str, int]:
+    """Get subscriber statistics"""
+    total = db.exec(select(Subscriber)).all()
+    verified = len([s for s in total if s.verified])
+    return {"total": len(total), "verified": verified}
+--------------
+./backend/app/scheduler.py
+"""
+Background scheduler for automated tasks using APScheduler.
+
+This module sets up scheduled jobs like daily digest email sending.
+"""
+
+import logging
+from datetime import datetime, timedelta
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from sqlmodel import select
+
+from app.core.config import settings
+from app.db.session import session_scope
+from app.models.entities import Paper, Subscriber
+from app.services.email_service import email_service
+
+logger = logging.getLogger(__name__)
+
+scheduler = BackgroundScheduler()
+
+
+def send_daily_digest_job():
+    """
+    Scheduled job to send daily digest to all verified subscribers.
+
+    This job runs daily at the configured hour (default: 8 AM).
+    It sends papers from yesterday's HF listing.
+    """
+    logger.info("🕐 Starting scheduled daily digest job")
+
+    # Check if email service is configured
+    if not settings.brevo_api_key:
+        logger.warning("BREVO_API_KEY not configured. Skipping daily digest.")
+        return
+
+    try:
+        # Get yesterday's date
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        target_date = yesterday.strftime("%Y-%m-%d")
+
+        logger.info(f"Fetching papers for date: {target_date}")
+
+        # Get papers from database
+        with session_scope() as session:
+            papers = session.exec(
+                select(Paper)
+                .where(Paper.hf_listing_date == target_date)
+                .order_by(Paper.breakthrough_score.desc(), Paper.published_at.desc())
+            ).all()
+
+            if not papers:
+                logger.info(f"No papers found for {target_date}. Skipping digest.")
+                return
+
+            logger.info(f"Found {len(papers)} papers to send")
+            breakthrough_count = sum(1 for p in papers if p.breakthrough_label)
+            logger.info(f"  - Breakthrough: {breakthrough_count}")
+            logger.info(f"  - Regular: {len(papers) - breakthrough_count}")
+
+            # Get all verified subscribers
+            subscribers = session.exec(
+                select(Subscriber).where(Subscriber.verified == True)
+            ).all()
+
+            if not subscribers:
+                logger.info("No verified subscribers. Skipping digest.")
+                return
+
+            logger.info(f"Sending digest to {len(subscribers)} subscriber(s)")
+
+            # Send to each subscriber
+            sent = 0
+            failed = 0
+
+            for subscriber in subscribers:
+                try:
+                    success = email_service.send_daily_digest(
+                        email=subscriber.email,
+                        papers=papers,
+                        unsubscribe_token=subscriber.verify_token
+                    )
+
+                    if success:
+                        sent += 1
+                        logger.info(f"✅ Sent to {subscriber.email}")
+                    else:
+                        failed += 1
+                        logger.error(f"❌ Failed to send to {subscriber.email}")
+
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"❌ Error sending to {subscriber.email}: {e}")
+
+            # Log summary
+            logger.info("=" * 60)
+            logger.info(f"Daily digest job completed")
+            logger.info(f"✅ Sent: {sent}")
+            logger.info(f"❌ Failed: {failed}")
+            logger.info("=" * 60)
+
+    except Exception as e:
+        logger.error(f"Error in daily digest job: {e}", exc_info=True)
+
+
+def start_scheduler():
+    """
+    Start the background scheduler with all configured jobs.
+
+    This should be called once during application startup.
+    """
+    if scheduler.running:
+        logger.warning("Scheduler is already running")
+        return
+
+    # Add daily digest job
+    # Runs every day at the configured hour (default: 8 AM UTC)
+    scheduler.add_job(
+        send_daily_digest_job,
+        trigger=CronTrigger(hour=settings.daily_digest_hour, minute=0),
+        id="daily_digest",
+        name="Send Daily Paper Digest",
+        replace_existing=True,
+    )
+
+    scheduler.start()
+    logger.info(f"✅ Scheduler started. Daily digest will run at {settings.daily_digest_hour}:00 UTC")
+
+
+def stop_scheduler():
+    """
+    Stop the background scheduler.
+
+    This should be called during application shutdown.
+    """
+    if scheduler.running:
+        scheduler.shutdown()
+        logger.info("Scheduler stopped")
+--------------
+./backend/app/main.py
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+
+from app.api.routes import keywords, papers, subscribers
+from app.db.session import init_db
+from app.scheduler import start_scheduler, stop_scheduler
+
+app = FastAPI(title="Daily Paper Insights API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    stop_scheduler()
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+app.include_router(papers.router, prefix="/api")
+app.include_router(keywords.router, prefix="/api")
+app.include_router(subscribers.router, prefix="/api")
+
+frontend_path = Path(__file__).resolve().parents[2] / "frontend"
+if frontend_path.exists():
+    app.mount(
+        "/dashboard",
+        StaticFiles(directory=frontend_path, html=True),
+        name="dashboard",
+    )
+
+
+@app.get("/", include_in_schema=False)
+def root_redirect() -> RedirectResponse:
+    if frontend_path.exists():
+        return RedirectResponse(url="/dashboard/")
+    return RedirectResponse(url="/health")
+--------------
+./backend/app/services/__init__.py
+from .arxiv_fetcher import ArxivFetcher, fetch_arxiv_paper
+from .hf_client import fetch_daily_identifiers
+from .llm_client import analyze_paper_with_llm
+from .types import ArxivPaper, FindingSummary, LLMAnalysis, Metric, Section
+
+__all__ = [
+    "ArxivFetcher",
+    "fetch_arxiv_paper",
+    "fetch_daily_identifiers",
+    "analyze_paper_with_llm",
+    "ArxivPaper",
+    "FindingSummary",
+    "LLMAnalysis",
+    "Metric",
+    "Section",
+]
+--------------
+./backend/app/services/types.py
+from dataclasses import dataclass
+from datetime import datetime
+from typing import List, Optional
+
+
+@dataclass
+class Section:
+    heading: str
+    content: str
+
+
+@dataclass
+class ArxivPaper:
+    arxiv_id: str
+    title: str
+    authors: List[str]
+    institutions: List[str]
+    abstract: str
+    published_at: Optional[datetime]
+    categories: List[str]
+    sections: List[Section]
+    raw_html: Optional[str]
+    raw_text: Optional[str]
+    source: str
+
+
+@dataclass
+class Metric:
+    name: str
+    dataset: Optional[str] = None
+    value: Optional[float] = None
+    unit: Optional[str] = None
+    baseline: Optional[float] = None
+    delta: Optional[float] = None
+    raw: Optional[str] = None
+
+
+@dataclass
+class FindingSummary:
+    claim_text: str
+    experiment_design: Optional[str]
+    evidence_snippet: Optional[str]
+    metrics: List[Metric]
+
+
+@dataclass
+class LLMAnalysis:
+    problem: str
+    solution: str
+    effect: str
+    keywords: List[str]
+    breakthrough_score: float
+    breakthrough_label: bool
+    breakthrough_reason: str
+    findings: List[FindingSummary]
+--------------
+./backend/app/services/email_service.py
+import logging
+from typing import List, Optional
+
+import sib_api_v3_sdk
+from sib_api_v3_sdk.rest import ApiException
+
+from app.core.config import settings
+from app.models.entities import Paper
+
+logger = logging.getLogger(__name__)
+
+
+class EmailService:
+    """Service for sending emails via Brevo (Sendinblue)"""
+
+    def __init__(self):
+        if not settings.brevo_api_key:
+            logger.warning("BREVO_API_KEY not configured. Email sending will be disabled.")
+            self.api_instance = None
+        else:
+            configuration = sib_api_v3_sdk.Configuration()
+            configuration.api_key['api-key'] = settings.brevo_api_key
+            api_client = sib_api_v3_sdk.ApiClient(configuration)
+            self.api_instance = sib_api_v3_sdk.TransactionalEmailsApi(api_client)
+
+    def _send_email(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        to_name: Optional[str] = None
+    ) -> bool:
+        """
+        Internal method to send email via Brevo API
+
+        Returns:
+            bool: True if email sent successfully, False otherwise
+        """
+        if not self.api_instance:
+            logger.error("Email service not configured. Skipping email send.")
+            return False
+
+        try:
+            send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+                to=[{"email": to_email, "name": to_name or to_email}],
+                html_content=html_content,
+                sender={
+                    "email": settings.email_from_address,
+                    "name": settings.email_from_name
+                },
+                subject=subject
+            )
+
+            response = self.api_instance.send_transac_email(send_smtp_email)
+            logger.info(f"Email sent successfully to {to_email}. Message ID: {response.message_id}")
+            return True
+
+        except ApiException as e:
+            logger.error(f"Failed to send email to {to_email}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error sending email to {to_email}: {e}")
+            return False
+
+    def send_verification_email(self, email: str, verify_token: str) -> bool:
+        """
+        Send email verification link to new subscriber
+
+        Args:
+            email: Subscriber's email address
+            verify_token: Unique verification token
+
+        Returns:
+            bool: True if email sent successfully
+        """
+        verify_url = f"{settings.frontend_url}/api/subscribers/verify?token={verify_token}"
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                          color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }}
+                .content {{ background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }}
+                .button {{ display: inline-block; padding: 12px 30px; background: #667eea;
+                          color: white !important; text-decoration: none; border-radius: 5px;
+                          font-weight: bold; margin: 20px 0; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #666; font-size: 12px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📧 Verify Your Email</h1>
+                </div>
+                <div class="content">
+                    <h2>Welcome to Daily Paper Insights!</h2>
+                    <p>Thank you for subscribing to our daily AI research paper digest.
+                       Click the button below to verify your email address:</p>
+
+                    <div style="text-align: center;">
+                        <a href="{verify_url}" class="button">Verify Email Address</a>
+                    </div>
+
+                    <p>Or copy and paste this link into your browser:</p>
+                    <p style="word-break: break-all; color: #667eea;">{verify_url}</p>
+
+                    <p style="margin-top: 30px; color: #666;">
+                        If you didn't subscribe to Daily Paper Insights, you can safely ignore this email.
+                    </p>
+                </div>
+                <div class="footer">
+                    <p>Daily Paper Insights - Stay updated with breakthrough AI research</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        return self._send_email(
+            to_email=email,
+            subject="Verify your email - Daily Paper Insights",
+            html_content=html_content
+        )
+
+    def send_daily_digest(self, email: str, papers: List[Paper], unsubscribe_token: str) -> bool:
+        """
+        Send daily digest of papers to subscriber
+
+        Args:
+            email: Subscriber's email address
+            papers: List of Paper objects to include in digest
+            unsubscribe_token: Token for unsubscribe link
+
+        Returns:
+            bool: True if email sent successfully
+        """
+        if not papers:
+            logger.info(f"No papers to send to {email}, skipping digest")
+            return False
+
+        unsubscribe_url = f"{settings.frontend_url}/api/subscribers/unsubscribe?token={unsubscribe_token}"
+
+        # Separate breakthrough and regular papers
+        breakthrough_papers = [p for p in papers if p.breakthrough_label]
+        regular_papers = [p for p in papers if not p.breakthrough_label]
+
+        # Build paper cards HTML
+        papers_html = ""
+
+        if breakthrough_papers:
+            papers_html += "<h2 style='color: #d97706; margin-top: 30px;'>🔥 Breakthrough Papers</h2>"
+            for paper in breakthrough_papers:
+                papers_html += self._render_paper_card(paper, is_breakthrough=True)
+
+        if regular_papers:
+            papers_html += "<h2 style='color: #667eea; margin-top: 30px;'>📄 Other Notable Papers</h2>"
+            for paper in regular_papers:
+                papers_html += self._render_paper_card(paper, is_breakthrough=False)
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; background: #f5f5f5; }}
+                .container {{ max-width: 700px; margin: 0 auto; background: white; }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                          color: white; padding: 30px; text-align: center; }}
+                .content {{ padding: 20px 30px; }}
+                .paper-card {{ background: #f9f9f9; border-left: 4px solid #667eea;
+                              padding: 20px; margin: 15px 0; border-radius: 5px; }}
+                .paper-card.breakthrough {{ border-left-color: #d97706; background: #fffbeb; }}
+                .paper-title {{ font-size: 18px; font-weight: bold; color: #1f2937; margin-bottom: 10px; }}
+                .paper-meta {{ font-size: 13px; color: #666; margin-bottom: 10px; }}
+                .paper-section {{ margin: 10px 0; }}
+                .paper-section strong {{ color: #667eea; }}
+                .keywords {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+                .keyword {{ background: #e0e7ff; color: #4338ca; padding: 4px 12px;
+                           border-radius: 12px; font-size: 12px; }}
+                .arxiv-link {{ display: inline-block; margin-top: 10px; color: #667eea;
+                              text-decoration: none; font-weight: bold; }}
+                .footer {{ background: #f9f9f9; padding: 20px; text-align: center;
+                          color: #666; font-size: 12px; }}
+                .unsubscribe {{ color: #999; text-decoration: none; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📚 Daily Paper Insights</h1>
+                    <p style="margin: 0; opacity: 0.9;">Your curated AI research digest</p>
+                </div>
+                <div class="content">
+                    <p>Hi there! Here are today's most interesting AI research papers:</p>
+                    {papers_html}
+                </div>
+                <div class="footer">
+                    <p>Daily Paper Insights - Curated AI research delivered daily</p>
+                    <p><a href="{unsubscribe_url}" class="unsubscribe">Unsubscribe</a></p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        return self._send_email(
+            to_email=email,
+            subject=f"📚 Daily AI Papers - {len(papers)} papers ({len(breakthrough_papers)} breakthroughs)",
+            html_content=html_content
+        )
+
+    def _render_paper_card(self, paper: Paper, is_breakthrough: bool = False) -> str:
+        """Render a single paper card HTML"""
+        card_class = "paper-card breakthrough" if is_breakthrough else "paper-card"
+
+        # Format authors (show first 3)
+        authors_str = ", ".join(paper.authors[:3])
+        if len(paper.authors) > 3:
+            authors_str += f" et al. ({len(paper.authors)} total)"
+
+        # Format institutions (show first 2)
+        institutions_str = ""
+        if paper.institutions:
+            institutions_str = ", ".join(paper.institutions[:2])
+            if len(paper.institutions) > 2:
+                institutions_str += f" +{len(paper.institutions) - 2} more"
+
+        # Build sections
+        sections_html = ""
+        if paper.problem_summary:
+            sections_html += f"<div class='paper-section'><strong>Problem:</strong> {paper.problem_summary}</div>"
+        if paper.solution_summary:
+            sections_html += f"<div class='paper-section'><strong>Solution:</strong> {paper.solution_summary}</div>"
+        if paper.effect_summary:
+            sections_html += f"<div class='paper-section'><strong>Impact:</strong> {paper.effect_summary}</div>"
+
+        # Keywords
+        keywords_html = ""
+        if paper.keywords:
+            keyword_tags = "".join([f"<span class='keyword'>{kw}</span>" for kw in paper.keywords[:8]])
+            keywords_html = f"<div class='keywords'>{keyword_tags}</div>"
+
+        # Breakthrough indicator
+        breakthrough_badge = ""
+        if is_breakthrough:
+            score = f"{paper.breakthrough_score:.2f}" if paper.breakthrough_score else "N/A"
+            breakthrough_badge = f"<div style='color: #d97706; font-weight: bold; margin-bottom: 10px;'>🔥 Breakthrough Score: {score}</div>"
+
+        return f"""
+        <div class='{card_class}'>
+            {breakthrough_badge}
+            <div class='paper-title'>{paper.title}</div>
+            <div class='paper-meta'>
+                👤 {authors_str}<br/>
+                🏛️ {institutions_str if institutions_str else "N/A"}<br/>
+                📅 {paper.published_at.strftime('%Y-%m-%d') if paper.published_at else 'N/A'}
+            </div>
+            {sections_html}
+            {keywords_html}
+            <a href='https://arxiv.org/abs/{paper.arxiv_id}' class='arxiv-link' target='_blank'>
+                Read on arXiv →
+            </a>
+        </div>
+        """
+
+
+# Singleton instance
+email_service = EmailService()
+--------------
+./backend/app/services/llm_client.py
+from __future__ import annotations
+
+import json
+import logging
+from typing import List, Optional
+
+from openai import OpenAI
+
+from app.core.config import settings
+from app.services.types import ArxivPaper, FindingSummary, LLMAnalysis, Metric
+
+SYSTEM_PROMPT = """你是一位面向科研工作者的中文助手，负责阅读并总结最新的学术论文。务必按照给定的 JSON 结构输出结果，全程使用简体中文，保持准确、专业、凝练。"""
+
+USER_PROMPT_TEMPLATE = """
+论文元数据：
+- arXiv ID：{arxiv_id}
+- 标题：{title}
+- 作者：{authors}
+- 机构：{institutions}
+- 摘要：{abstract}
+- 分类标签：{categories}
+
+正文片段（截取自 HTML/PDF）：
+{sections}
+
+任务要求（全部使用简体中文）：
+1. 用 1-2 句话概述论文要解决的核心问题（problem 字段）。
+2. 用 1-2 句话提炼论文提出的主要方案或方法（solution 字段）。
+3. 描述论文的主要效果/成果，包含关键量化指标或相对提升（effect 字段，尽量列出数值）。
+4. 至少整理 1 条核心结论（findings 数组）。每条需包含：
+   - claim_text：一句话总结结论。
+   - experiment_design：简述支撑该结论的实验设计（数据集/任务/设置）。
+   - evidence_snippet：引用原文或描述中的关键句（可直接引用英文原句）。
+   - metrics：列出相关量化指标，使用对象数组，字段包括 name/dataset/value/unit/baseline/delta/raw（缺失可置 null）。
+5. 生成 5-8 个关键词（keywords 数组，全部小写，必要时可用连字符）。
+6. 评估 breakthrough_score（0-1 之间的浮点数），参考因素：是否来自头部机构、是否提出全新方法、指标提升幅度、潜在影响力。
+7. 当且仅当 breakthrough_score ≥ {threshold} 时将 breakthrough_label 设为 true。
+8. 在 breakthrough_reason 中用不超过 30 个汉字解释判定理由。
+
+返回 JSON 结构如下：
+{{
+  "problem": "……",
+  "solution": "……",
+  "effect": "……",
+  "findings": [
+    {{
+      "claim_text": "……",
+      "experiment_design": "……",
+      "evidence_snippet": "……",
+      "metrics": [
+        {{
+          "name": "…",
+          "dataset": "…",
+          "value": …,
+          "unit": "…",
+          "baseline": …,
+          "delta": …,
+          "raw": "原始描述"
+        }}
+      ]
+    }}
+  ],
+  "keywords": ["…"],
+  "breakthrough_score": 0.x,
+  "breakthrough_label": true/false,
+  "breakthrough_reason": "……"
+}}
+"""
+
+
+def _format_sections(sections: List[str]) -> str:
+    return "\n".join(sections)
+
+
+def build_prompt(paper: ArxivPaper, context_sections: Optional[List[str]] = None) -> str:
+    section_texts = []
+    for section in paper.sections[:12]:  # keep prompt size manageable
+        heading = f"[{section.heading}]" if section.heading else ""
+        content = section.content.strip()
+        if not content:
+            continue
+        section_texts.append(f"{heading}\n{content}")
+    if not section_texts and paper.raw_text:
+        section_texts.append(paper.raw_text[:5000])
+    if context_sections:
+        section_texts.extend(context_sections)
+    return USER_PROMPT_TEMPLATE.format(
+        arxiv_id=paper.arxiv_id,
+        title=paper.title,
+        authors=", ".join(paper.authors),
+        institutions=", ".join(paper.institutions) or "unknown",
+        abstract=paper.abstract,
+        categories=", ".join(paper.categories),
+        sections=_format_sections(section_texts),
+        threshold=settings.breakthrough_threshold,
+    )
+
+
+def _strip_code_fence(content: str) -> str:
+    content = content.strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if lines:
+            # drop opening fence
+            lines = lines[1:]
+        for idx, line in enumerate(lines):
+            if line.strip().startswith("```"):
+                lines = lines[:idx]
+                break
+        content = "\n".join(lines).strip()
+    return content
+
+
+logger = logging.getLogger("llm")
+
+
+def call_deepseek(prompt: str) -> Optional[dict]:
+    if not settings.deepseek_api_key:
+        logger.warning("DeepSeek API key not configured; using heuristic fallback.")
+        return None
+    logger.debug("DeepSeek prompt: %s", prompt)
+    client = OpenAI(api_key=settings.deepseek_api_key, base_url=settings.deepseek_base_url)
+    response = client.chat.completions.create(
+        model=settings.deepseek_model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    if not response or not response.choices:
+        logger.error("DeepSeek returned no choices for prompt")
+        return None
+    content = response.choices[0].message.content or ""
+    content = _strip_code_fence(content)
+    logger.debug("DeepSeek raw response: %s", content)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        logger.exception("Failed to decode DeepSeek JSON response: %s", content[:1000])
+        return None
+
+
+def parse_metrics(raw_metrics: List[dict]) -> List[Metric]:
+    metrics: List[Metric] = []
+    for item in raw_metrics:
+        metrics.append(
+            Metric(
+                name=item.get("name", ""),
+                dataset=item.get("dataset"),
+                value=item.get("value"),
+                unit=item.get("unit"),
+                baseline=item.get("baseline"),
+                delta=item.get("delta"),
+                raw=item.get("raw"),
+            )
+        )
+    return metrics
+
+
+def parse_llm_analysis(payload: dict) -> LLMAnalysis:
+    findings = []
+    for raw in payload.get("findings", []):
+        findings.append(
+            FindingSummary(
+                claim_text=raw.get("claim_text", ""),
+                experiment_design=raw.get("experiment_design"),
+                evidence_snippet=raw.get("evidence_snippet"),
+                metrics=parse_metrics(raw.get("metrics", [])),
+            )
+        )
+    return LLMAnalysis(
+        problem=payload.get("problem", ""),
+        solution=payload.get("solution", ""),
+        effect=payload.get("effect", ""),
+        keywords=[kw.lower() for kw in payload.get("keywords", [])],
+        breakthrough_score=float(payload.get("breakthrough_score", 0.0)),
+        breakthrough_label=bool(payload.get("breakthrough_label", False)),
+        breakthrough_reason=payload.get("breakthrough_reason", ""),
+        findings=findings,
+    )
+
+
+def heuristic_analysis(paper: ArxivPaper) -> LLMAnalysis:
+    abstract = paper.abstract or ""
+    first_section = paper.sections[0].content if paper.sections else paper.raw_text or ""
+    problem = abstract.split(".")[0].strip() if abstract else first_section[:200]
+    solution = abstract.split(".")[1].strip() if abstract and "." in abstract else "Review full paper for solution"
+    effect = "Refer to experiments in the paper; automatic extraction unavailable"
+    keywords = [cat.lower() for cat in paper.categories][:6]
+    return LLMAnalysis(
+        problem=problem,
+        solution=solution,
+        effect=effect,
+        keywords=keywords,
+        breakthrough_score=0.3,
+        breakthrough_label=False,
+        breakthrough_reason="Automated fallback: verify manually",
+        findings=[],
+    )
+
+
+def analyze_paper_with_llm(paper: ArxivPaper, context_sections: Optional[List[str]] = None) -> LLMAnalysis:
+    prompt = build_prompt(paper, context_sections)
+    logger.info(
+        "Invoking DeepSeek for arXiv %s with model %s (prompt length=%d chars)",
+        paper.arxiv_id,
+        settings.deepseek_model,
+        len(prompt),
+    )
+    payload = call_deepseek(prompt)
+    if payload:
+        try:
+            logger.debug(
+                "DeepSeek payload for %s: %s",
+                paper.arxiv_id,
+                json.dumps(payload, ensure_ascii=False)[:2000],
+            )
+            return parse_llm_analysis(payload)
+        except (ValueError, TypeError):
+            logger.exception("Parsing DeepSeek payload failed; falling back to heuristic for %s", paper.arxiv_id)
+            return heuristic_analysis(paper)
+    logger.warning("DeepSeek call yielded no payload for %s; using heuristic analysis", paper.arxiv_id)
+    return heuristic_analysis(paper)
+--------------
+./backend/app/services/hf_client.py
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+import logging
+import re
+from typing import List, Optional
+
+import httpx
+from selectolax.parser import HTMLParser
+
+from app.core.config import settings
+
+PAPER_HREF_PATTERN = re.compile(r"/papers/(?P<identifier>\d{4}\.\d{4,5})(?:v\d+)?")
+
+
+class HuggingFaceDailyClient:
+    def __init__(self) -> None:
+        self.base_url = settings.hf_daily_url.rstrip("/") + "/"
+        self.session = httpx.Client(
+            timeout=settings.request_timeout,
+            headers={"User-Agent": settings.user_agent},
+            follow_redirects=True,
+        )
+        self.logger = logging.getLogger("hf")
+
+    def fetch_identifiers(self, target_date: date) -> List[str]:
+        url = f"{self.base_url}{target_date.isoformat()}"
+        response = self.session.get(url)
+        response.raise_for_status()
+        final_url = str(response.request.url)
+        if final_url.rstrip("/") != url.rstrip("/"):
+            self.logger.info("Hugging Face redirected %s -> %s", url, final_url)
+        parser = HTMLParser(response.text)
+        identifiers: List[str] = []
+        for node in parser.css("a"):
+            href = node.attributes.get("href")
+            if not href:
+                continue
+            match = PAPER_HREF_PATTERN.search(href)
+            if match:
+                identifiers.append(match.group("identifier"))
+        return sorted(set(identifiers))
+
+    def close(self) -> None:
+        self.session.close()
+
+
+def fetch_daily_identifiers(target_date: Optional[date] = None) -> List[str]:
+    client = HuggingFaceDailyClient()
+    try:
+        if target_date is None:
+            target_date = (datetime.utcnow() - timedelta(days=1)).date()
+        try:
+            return client.fetch_identifiers(target_date)
+        except httpx.HTTPStatusError as exc:  # pragma: no cover - network dependent
+            if exc.response.status_code == 404:
+                client.logger.warning(
+                    "Hugging Face returned 404 for %s; no daily page available yet",
+                    target_date.isoformat(),
+                )
+                return []
+            raise
+    finally:
+        client.close()
+--------------
+./backend/app/services/arxiv_fetcher.py
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime
+from typing import List, Optional
+
+import feedparser
+import httpx
+import fitz
+from selectolax.parser import HTMLParser
+from tenacity import retry, stop_after_attempt, wait_fixed
+
+from app.core.config import settings
+from app.services.types import ArxivPaper, Section
+
+ARXIV_ABS_API = "https://export.arxiv.org/api/query?search_query=id:{}&max_results=1"
+ARXIV_HTML_URL = "https://arxiv.org/html/{}"
+ARXIV_PDF_URL = "https://arxiv.org/pdf/{}"
+
+
+class ArxivFetchError(Exception):
+    pass
+
+
+class ArxivFetcher:
+    def __init__(self) -> None:
+        self.client = httpx.Client(timeout=settings.request_timeout, headers={"User-Agent": settings.user_agent})
+        self.logger = logging.getLogger("arxiv_fetcher")
+
+    def close(self) -> None:
+        self.client.close()
+
+    @retry(wait=wait_fixed(2), stop=stop_after_attempt(3))
+    def _get(self, url: str) -> httpx.Response:
+        response = self.client.get(url)
+        response.raise_for_status()
+        return response
+
+    def fetch_metadata(self, arxiv_id: str) -> tuple[str, List[str], str, Optional[datetime], List[str]]:
+        response = self._get(ARXIV_ABS_API.format(arxiv_id))
+        feed = feedparser.parse(response.text)
+        if not feed.entries:
+            raise ArxivFetchError(f"No metadata found for {arxiv_id}")
+        entry = feed.entries[0]
+        title = entry.title.strip()
+        authors = [author.name.strip() for author in entry.authors]
+        summary = entry.summary.strip()
+        categories = [tag.term for tag in entry.tags] if "tags" in entry else []
+        published = None
+        if hasattr(entry, "published_parsed") and entry.published_parsed:
+            published = datetime(*entry.published_parsed[:6])
+        return title, authors, summary, published, categories
+
+    def fetch_html(self, arxiv_id: str) -> Optional[str]:
+        url = ARXIV_HTML_URL.format(arxiv_id)
+        response = self.client.get(url)
+        if response.status_code == 200 and "<html" in response.text.lower():
+            self.logger.info("Loaded HTML for %s (%s)", arxiv_id, url)
+            self.logger.debug(
+                "HTML content preview for %s: %s",
+                arxiv_id,
+                response.text[:2000],
+            )
+            return response.text
+        self.logger.warning("HTML unavailable for %s (%s) status=%s", arxiv_id, url, response.status_code)
+        return None
+
+    def fetch_pdf_text(self, arxiv_id: str) -> str:
+        url = ARXIV_PDF_URL.format(arxiv_id)
+        response = self._get(url)
+        doc = fitz.open(stream=response.content, filetype="pdf")
+        text = "\n".join(page.get_text("text") for page in doc)
+        doc.close()
+        if not text.strip():
+            raise ArxivFetchError(f"Unable to extract text from PDF {arxiv_id}")
+        self.logger.info("Extracted PDF text for %s (%s)", arxiv_id, url)
+        self.logger.debug(
+            "PDF text preview for %s: %s",
+            arxiv_id,
+            text[:2000],
+        )
+        return text
+
+    @staticmethod
+    def parse_sections_from_html(html: str) -> List[Section]:
+        parser = HTMLParser(html)
+        sections: List[Section] = []
+        # arXiv HTML uses div.ltx_section containing headings and paragraphs
+        for section in parser.css("div.ltx_section"):
+            heading_node = section.css_first("h2, h3, h4, h5, h6")
+            heading = heading_node.text(strip=True) if heading_node else ""
+            paragraphs = [p.text(strip=True) for p in section.css("p") if p.text(strip=True)]
+            content = "\n".join(paragraphs)
+            if heading or content:
+                sections.append(Section(heading=heading, content=content))
+        if not sections:
+            # fallback: grab paragraphs in body
+            paragraphs = [p.text(strip=True) for p in parser.css("p") if p.text(strip=True)]
+            if paragraphs:
+                sections.append(Section(heading="Body", content="\n".join(paragraphs)))
+        return sections
+
+    def extract_institutions(self, html: Optional[str], authors: List[str]) -> List[str]:
+        if not html:
+            return []
+        parser = HTMLParser(html)
+        institutions: List[str] = []
+        for node in parser.css("span.ltx_role_affiliation, span.ltx_affiliation"):  # best-effort match
+            text = node.text(strip=True)
+            if text:
+                institutions.append(text)
+        if institutions:
+            return sorted(set(institutions))
+        # fallback heuristic: search for parentheses after author names
+        raw_text = parser.text(separator="\n")
+        pattern = re.compile(r"\(([^)]+University[^)]*)\)")
+        guesses = pattern.findall(raw_text)
+        return sorted(set(guesses)) if guesses else []
+
+    def fetch(self, arxiv_id: str) -> ArxivPaper:
+        title, authors, summary, published, categories = self.fetch_metadata(arxiv_id)
+        html = self.fetch_html(arxiv_id)
+        sections: List[Section]
+        raw_text: Optional[str] = None
+        if html:
+            sections = self.parse_sections_from_html(html)
+            source = ARXIV_HTML_URL.format(arxiv_id)
+        else:
+            raw_text = self.fetch_pdf_text(arxiv_id)
+            sections = [Section(heading="Extracted", content=raw_text)]
+            source = ARXIV_PDF_URL.format(arxiv_id)
+
+        institutions = self.extract_institutions(html, authors) if html else []
+        return ArxivPaper(
+            arxiv_id=arxiv_id,
+            title=title,
+            authors=authors,
+            institutions=institutions,
+            abstract=summary,
+            published_at=published,
+            categories=categories,
+            sections=sections,
+            raw_html=html,
+            raw_text=raw_text,
+            source=source,
+        )
+
+
+def fetch_arxiv_paper(arxiv_id: str) -> ArxivPaper:
+    fetcher = ArxivFetcher()
+    try:
+        return fetcher.fetch(arxiv_id)
+    finally:
+        fetcher.close()
+--------------
+./backend/tests/conftest.py
+# """
+# Pytest configuration and shared fixtures for the entire test suite.
+# """
+# import sys
+# from pathlib import Path
+
+# import pytest
+# from sqlalchemy import create_engine
+# from sqlmodel import SQLModel
+# from sqlalchemy import delete
+# from sqlalchemy.orm import sessionmaker, Session
+
+
+# # Add the app directory to Python path
+# sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+# @pytest.fixture(scope="session")
+# def test_db_engine():
+#     """Create a test database engine."""
+#     # Use in-memory SQLite for tests
+#     engine = create_engine("sqlite:///:memory:", echo=False)
+#     SQLModel.metadata.create_all(engine)
+#     yield engine
+#     engine.dispose()
+
+
+# @pytest.fixture(scope="function")
+# def test_db_session(test_db_engine):
+#     # 每个测试前确保表存在（如果你的 engine 是内存库也很必要）
+#     SQLModel.metadata.create_all(test_db_engine)
+
+#     TestingSessionLocal = sessionmaker(bind=test_db_engine, autoflush=False, autocommit=False, class_=Session)
+
+#     with TestingSessionLocal() as session:
+#         yield session
+#         session.rollback()  # 以防未提交的事务
+
+#     # 每个测试后清掉所有表结构（最干净）
+#     SQLModel.metadata.drop_all(test_db_engine)
+--------------
+./backend/tests/test_models/__init__.py
+# Test models package
+--------------
+./backend/tests/test_models/test_entities.py
+"""
+Unit tests for entities.py models.
+"""
+# test_models.py
+import pytest
+from datetime import datetime
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import SQLModel, Session, create_engine, select
+
+from app.models.entities import Paper, Finding, KeywordStat, Subscriber
+
+
+@pytest.fixture(scope="session")
+def engine(tmp_path_factory):
+    # 使用基于文件的 SQLite，避免内存库在多个会话上下文中丢数据
+    db_file = tmp_path_factory.mktemp("db") / "test.db"
+    engine = create_engine(f"sqlite:///{db_file}", echo=False)
+    return engine
+
+
+@pytest.fixture(autouse=True, scope="function")
+def create_and_drop_tables(engine):
+    SQLModel.metadata.create_all(engine)
+    yield
+    SQLModel.metadata.drop_all(engine)
+
+
+@pytest.fixture
+def session(engine):
+    with Session(engine) as s:
+        yield s
+
+
+def test_create_tables_and_crud(session: Session):
+    # 插入一条 Paper
+    paper = Paper(
+        arxiv_id="1234.56789",
+        title="A Test Paper for SQLModel",
+        authors=["Alice", "Bob"],
+        institutions=["MIT", "Stanford"],
+        abstract="This is a test abstract.",
+        keywords=["AI", "NLP"],
+        breakthrough_score=0.95,
+        breakthrough_label=True,
+    )
+
+    # 通过关系插入 Finding（反向设置 paper）
+    finding = Finding(
+        claim_text="This model achieves state-of-the-art results.",
+        metrics=["accuracy", "f1-score"],
+        paper=paper,
+    )
+
+    # 其他表
+    keyword_stat = KeywordStat(keyword="AI", paper_count=1)
+    subscriber = Subscriber(email="test@example.com", verified=True)
+
+    session.add(paper)
+    session.add(finding)
+    session.add(keyword_stat)
+    session.add(subscriber)
+    session.commit()
+
+    # 基本查询
+    papers = session.exec(select(Paper)).all()
+    assert len(papers) == 1
+    p = papers[0]
+    assert p.title == "A Test Paper for SQLModel"
+    assert p.authors == ["Alice", "Bob"]       # JSON 列校验
+    assert p.keywords == ["AI", "NLP"]
+    assert isinstance(p.created_at, datetime)  # 时间戳默认值校验
+
+    # 关系校验（Paper -> Findings）
+    assert len(p.findings) == 1
+    assert p.findings[0].claim_text.startswith("This model")
+
+    # 关系校验（Finding -> Paper）
+    f = session.exec(select(Finding)).first()
+    assert f is not None and f.paper is not None
+    assert f.paper.id == p.id
+
+    # 其他表数据校验
+    ks = session.exec(select(KeywordStat)).first()
+    assert ks.keyword == "AI" and ks.paper_count == 1
+
+    sub = session.exec(select(Subscriber)).first()
+    assert sub.email == "test@example.com"
+    assert sub.verified is True
+
+
+def test_arxiv_id_unique_constraint(session: Session):
+    p1 = Paper(
+        arxiv_id="unique-0001",
+        title="First",
+        authors=[],
+        institutions=[],
+        keywords=[],
+    )
+    session.add(p1)
+    session.commit()
+
+    p2 = Paper(
+        arxiv_id="unique-0001",  # 重复的 arxiv_id
+        title="Second",
+        authors=[],
+        institutions=[],
+        keywords=[],
+    )
+    session.add(p2)
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+    # 回滚后数据库仍只有第一条
+    session.rollback()
+    count = session.exec(select(Paper)).all()
+    assert len(count) == 1--------------
+./backend/tests/__init__.py
+# Tests package
+--------------
+./backend/scripts/migrate_hf_listing_date.py
+"""Normalize paper.hf_listing_date to YYYY-MM-DD strings.
+
+Run this once after updating the schema so Historical Explorer
+uses the correct Hugging Face listing date.
+
+Usage:
+    python migrate_hf_listing_date.py
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from rich.console import Console
+from sqlmodel import Session, select
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from app.db.session import engine  # noqa: E402
+from app.models import Paper  # noqa: E402
+
+console = Console()
+
+
+def normalize(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        # Already normalized
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            return text
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", ""))
+            return parsed.date().isoformat()
+        except ValueError:
+            pass
+        # Fallback: take first 10 chars if they look like a date
+        candidate = text[:10]
+        if len(candidate) == 10 and candidate[4] == "-" and candidate[7] == "-":
+            return candidate
+        raise ValueError(f"Unrecognized date string: {text!r}")
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    raise TypeError(f"Unsupported hf_listing_date type: {type(value)}")
+
+
+def migrate() -> None:
+    updated = 0
+    skipped = 0
+    with Session(engine) as session:
+        papers = session.exec(select(Paper)).all()
+        for paper in papers:
+            try:
+                normalized = normalize(paper.hf_listing_date)
+            except (TypeError, ValueError) as exc:  # noqa: BLE001
+                console.print(f"[red]Skipping {paper.arxiv_id}: {exc}")
+                skipped += 1
+                continue
+            if normalized and paper.hf_listing_date != normalized:
+                console.print(
+                    f"[cyan]{paper.arxiv_id}[/cyan] {paper.hf_listing_date!r} -> {normalized}")
+                paper.hf_listing_date = normalized
+                updated += 1
+        session.commit()
+    console.print(f"[green]Migration complete. Updated {updated} papers; skipped {skipped}.")
+
+
+if __name__ == "__main__":
+    migrate()
+--------------
+./backend/scripts/send_daily_digest.py
+#!/usr/bin/env python3
+"""
+Send daily digest emails to all verified subscribers.
+
+Usage:
+    python scripts/send_daily_digest.py                    # Send yesterday's papers
+    python scripts/send_daily_digest.py --date 2024-10-24  # Send specific date
+    python scripts/send_daily_digest.py --limit 5          # Test with 5 subscribers
+    python scripts/send_daily_digest.py --debug            # Enable verbose logging
+"""
+
+import argparse
+import logging
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+# Add backend directory to path
+backend_dir = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(backend_dir))
+
+from sqlmodel import Session, select
+
+from app.core.config import settings
+from app.db.session import engine, session_scope
+from app.models.entities import Paper, Subscriber
+from app.services.email_service import email_service
+
+# Setup logging
+log_dir = backend_dir / "logs"
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / "send_daily_digest.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Send daily digest emails to subscribers")
+    parser.add_argument(
+        "--date",
+        type=str,
+        help="Date to send digest for (YYYY-MM-DD). Defaults to yesterday.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Limit number of subscribers (for testing)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+    parser.add_argument(
+        "--breakthrough-only",
+        action="store_true",
+        help="Only send breakthrough papers",
+    )
+    return parser.parse_args()
+
+
+def get_papers_for_date(session: Session, target_date: str, breakthrough_only: bool = False):
+    """Get papers for a specific date"""
+    query = select(Paper).where(Paper.hf_listing_date == target_date)
+
+    if breakthrough_only:
+        query = query.where(Paper.breakthrough_label == True)
+
+    # Order by breakthrough score descending, then by published date
+    query = query.order_by(Paper.breakthrough_score.desc(), Paper.published_at.desc())
+
+    papers = session.exec(query).all()
+    return papers
+
+
+def send_digest_to_subscribers(
+    papers: list[Paper],
+    limit: int = None,
+    breakthrough_only: bool = False
+) -> dict:
+    """
+    Send digest to all verified subscribers
+
+    Returns:
+        dict: Statistics about sending (sent, failed, skipped)
+    """
+    if not papers:
+        logger.warning("No papers to send. Aborting digest.")
+        return {"sent": 0, "failed": 0, "skipped": 0}
+
+    stats = {"sent": 0, "failed": 0, "skipped": 0}
+
+    with session_scope() as session:
+        # Get all verified subscribers
+        query = select(Subscriber).where(Subscriber.verified == True)
+
+        if limit:
+            query = query.limit(limit)
+
+        subscribers = session.exec(query).all()
+
+        logger.info(f"Found {len(subscribers)} verified subscriber(s)")
+        logger.info(f"Sending digest with {len(papers)} paper(s)")
+
+        for subscriber in subscribers:
+            try:
+                logger.info(f"Sending digest to {subscriber.email}")
+
+                # Send email using the verify_token as unsubscribe token
+                success = email_service.send_daily_digest(
+                    email=subscriber.email,
+                    papers=papers,
+                    unsubscribe_token=subscriber.verify_token
+                )
+
+                if success:
+                    stats["sent"] += 1
+                    logger.info(f"✅ Successfully sent to {subscriber.email}")
+                else:
+                    stats["failed"] += 1
+                    logger.error(f"❌ Failed to send to {subscriber.email}")
+
+            except Exception as e:
+                stats["failed"] += 1
+                logger.error(f"❌ Error sending to {subscriber.email}: {e}")
+
+    return stats
+
+
+def main():
+    args = parse_args()
+
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    # Determine target date
+    if args.date:
+        target_date = args.date
+        logger.info(f"Using specified date: {target_date}")
+    else:
+        # Default to yesterday
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        target_date = yesterday.strftime("%Y-%m-%d")
+        logger.info(f"Using yesterday's date: {target_date}")
+
+    # Validate Brevo API key
+    if not settings.brevo_api_key:
+        logger.error("BREVO_API_KEY not configured. Cannot send emails.")
+        sys.exit(1)
+
+    logger.info("=" * 60)
+    logger.info("Starting Daily Digest Send")
+    logger.info(f"Target Date: {target_date}")
+    logger.info(f"Breakthrough Only: {args.breakthrough_only}")
+    if args.limit:
+        logger.info(f"Limit: {args.limit} subscribers (test mode)")
+    logger.info("=" * 60)
+
+    # Get papers for the date
+    with session_scope() as session:
+        papers = get_papers_for_date(session, target_date, args.breakthrough_only)
+
+    if not papers:
+        logger.warning(f"No papers found for date {target_date}. Nothing to send.")
+        return
+
+    logger.info(f"Found {len(papers)} paper(s) for {target_date}")
+
+    # Count breakthroughs
+    breakthrough_count = sum(1 for p in papers if p.breakthrough_label)
+    logger.info(f"  - Breakthrough papers: {breakthrough_count}")
+    logger.info(f"  - Regular papers: {len(papers) - breakthrough_count}")
+
+    # Send to subscribers
+    stats = send_digest_to_subscribers(papers, limit=args.limit, breakthrough_only=args.breakthrough_only)
+
+    # Print summary
+    logger.info("=" * 60)
+    logger.info("Daily Digest Send Complete")
+    logger.info(f"✅ Sent: {stats['sent']}")
+    logger.info(f"❌ Failed: {stats['failed']}")
+    logger.info(f"⏭️  Skipped: {stats['skipped']}")
+    logger.info("=" * 60)
+
+    if stats["failed"] > 0:
+        logger.warning("Some emails failed to send. Check logs for details.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+--------------
+./backend/scripts/daily_ingest.py
+from __future__ import annotations
+
+import argparse
+import logging
+from datetime import datetime, timedelta, date
+from pathlib import Path
+from typing import Iterable, List
+
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+LOG_DIR = ROOT_DIR / "logs"
+LOG_FILE = LOG_DIR / "daily_ingest.log"
+
+from rich.console import Console
+from rich.progress import Progress
+from sqlmodel import select
+
+from app.core.config import settings
+from app.db.session import init_db, session_scope
+from app.models import Finding, KeywordStat, Paper
+from app.services.arxiv_fetcher import ArxivFetcher
+from app.services.hf_client import fetch_daily_identifiers
+from app.services.llm_client import analyze_paper_with_llm
+
+console = Console()
+
+
+def configure_logging(debug: bool = False) -> logging.Logger:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("daily_ingest")
+    if logger.handlers:
+        level = logging.DEBUG if debug else logging.INFO
+        logger.setLevel(level)
+        for handler in logger.handlers:
+            handler.setLevel(level)
+        logging.getLogger("arxiv_fetcher").setLevel(level)
+        logging.getLogger("llm").setLevel(level)
+        return logger
+
+    level = logging.DEBUG if debug else logging.INFO
+    logger.setLevel(level)
+    handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    handler.setLevel(level)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.propagate = False
+
+    arxiv_logger = logging.getLogger("arxiv_fetcher")
+    arxiv_logger.setLevel(level)
+    arxiv_logger.addHandler(handler)
+    arxiv_logger.propagate = False
+
+    llm_logger = logging.getLogger("llm")
+    llm_logger.setLevel(level)
+    llm_logger.addHandler(handler)
+    llm_logger.propagate = False
+    return logger
+
+
+logger = logging.getLogger("daily_ingest")
+
+
+def ensure_storage_dirs(base: Path) -> None:
+    base.mkdir(parents=True, exist_ok=True)
+
+
+def upsert_keywords(session, keywords: Iterable[str]) -> None:
+    unique_keywords = {kw.strip().lower() for kw in keywords if kw}
+    for keyword in unique_keywords:
+        record = session.exec(
+            select(KeywordStat).where(KeywordStat.keyword == keyword)
+        ).first()
+        if record:
+            record.paper_count += 1
+            record.last_seen_at = datetime.utcnow()
+        else:
+            session.add(KeywordStat(keyword=keyword, paper_count=1))
+
+
+def ingest_paper(arxiv_id: str, fetcher: ArxivFetcher, listing_date: date) -> None:
+    #import pdb
+    #pdb.set_trace()
+    with session_scope() as session:
+        existing = session.exec(select(Paper).where(Paper.arxiv_id == arxiv_id)).first()
+        if existing:
+            console.print(f"[yellow]Skipping existing paper {arxiv_id}")
+            logger.info("Skipping existing paper %s", arxiv_id)
+            return
+
+    paper_data = fetcher.fetch(arxiv_id)
+    logger.info(
+        "Fetched arXiv content for %s (%s) via %s",
+        arxiv_id,
+        paper_data.title,
+        paper_data.source,
+    )
+    analysis = analyze_paper_with_llm(paper_data)
+    logger.info(
+        "LLM analysis complete for %s | breakthrough=%s score=%.3f",
+        arxiv_id,
+        analysis.breakthrough_label,
+        analysis.breakthrough_score,
+    )
+
+    with session_scope() as session:
+        db_paper = Paper(
+            arxiv_id=paper_data.arxiv_id,
+            title=paper_data.title,
+            authors=paper_data.authors,
+            institutions=paper_data.institutions,
+            abstract=paper_data.abstract,
+            source_url=f"https://huggingface.co/papers/{paper_data.arxiv_id}",
+            published_at=paper_data.published_at,
+            hf_listing_date=listing_date.isoformat(),
+            html_source=paper_data.raw_html,
+            problem_summary=analysis.problem,
+            solution_summary=analysis.solution,
+            effect_summary=analysis.effect,
+            keywords=analysis.keywords,
+            breakthrough_score=analysis.breakthrough_score,
+            breakthrough_label=analysis.breakthrough_label,
+            breakthrough_reason=analysis.breakthrough_reason,
+            llm_model=settings.deepseek_model if settings.deepseek_api_key else None,
+            updated_at=datetime.utcnow(),
+        )
+        session.add(db_paper)
+        session.flush()
+
+        for finding in analysis.findings:
+            session.add(
+                Finding(
+                    paper_id=db_paper.id,
+                    claim_text=finding.claim_text,
+                    experiment_design=finding.experiment_design,
+                    evidence_snippet=finding.evidence_snippet,
+                    metrics=[metric.__dict__ for metric in finding.metrics],
+                )
+            )
+
+        upsert_keywords(session, analysis.keywords)
+        console.print(
+            f"[green]Stored {arxiv_id} | breakthrough={'yes' if analysis.breakthrough_label else 'no'}"
+        )
+        logger.info("Stored paper %s with %d findings", arxiv_id, len(analysis.findings))
+
+
+def run_ingest(limit: int | None = None, target_date: date | None = None, debug: bool = False) -> None:
+    configure_logging(debug=debug)
+    init_db()
+    ensure_storage_dirs(Path("storage"))
+    if target_date is None:
+        target_date = (datetime.utcnow() - timedelta(days=1)).date()
+    console.print(f"[cyan]Fetching Hugging Face daily list for {target_date.isoformat()}[/cyan]")
+    logger.info("Starting ingest for %s", target_date.isoformat())
+    identifiers = fetch_daily_identifiers(target_date)
+    if limit:
+        identifiers = identifiers[:limit]
+    if not identifiers:
+        console.print("[red]No papers found on Hugging Face daily page")
+        logger.warning("No identifiers found for %s", target_date.isoformat())
+        return
+
+    fetcher = ArxivFetcher()
+    try:
+        with Progress() as progress:
+            task = progress.add_task("Ingesting papers", total=len(identifiers))
+            for arxiv_id in identifiers:
+                try:
+                    ingest_paper(arxiv_id, fetcher, listing_date=target_date)
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[red]Failed to ingest {arxiv_id}: {exc}")
+                    logger.exception("Failed to ingest %s", arxiv_id)
+                finally:
+                    progress.advance(task)
+    finally:
+        fetcher.close()
+        logger.info("Completed ingest for %s", target_date.isoformat())
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Ingest arXiv papers from Hugging Face daily feed")
+    parser.add_argument("--limit", type=int, default=None, help="Optional max number of papers")
+    parser.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Target date in YYYY-MM-DD (defaults to yesterday UTC)",
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging")
+    args = parser.parse_args()
+    target = None
+    if args.date:
+        try:
+            target = datetime.strptime(args.date, "%Y-%m-%d").date()
+        except ValueError:
+            parser.error(f"Invalid date format: {args.date}. Use YYYY-MM-DD.")
+    run_ingest(limit=args.limit, target_date=target, debug=args.debug)
+--------------
+./debug_dates.py
+#!/usr/bin/env python3
+"""Debug script to check date formats in the database"""
+import sys
+sys.path.insert(0, '/Users/liujiaxiang/code/papers/backend')
+
+from sqlmodel import Session, create_engine, select
+from app.models import Paper
+
+# Connect to database
+engine = create_engine("sqlite:///backend/papers.db")
+
+with Session(engine) as session:
+    # Get some sample papers
+    statement = select(Paper).limit(10)
+    papers = session.exec(statement).all()
+    
+    print("=" * 80)
+    print("Sample Paper Dates:")
+    print("=" * 80)
+    
+    for paper in papers:
+        print(f"\nPaper ID: {paper.id}")
+        print(f"  Title: {paper.title[:50]}...")
+        print(f"  published_at: {paper.published_at} (type: {type(paper.published_at)})")
+        print(f"  hf_listing_date: {paper.hf_listing_date} (type: {type(paper.hf_listing_date)})")
+        if paper.hf_listing_date:
+            print(f"  hf_listing_date length: {len(str(paper.hf_listing_date))}")
+    
+    # Check available dates from calendar endpoint logic
+    print("\n" + "=" * 80)
+    print("Available Dates (calendar endpoint):")
+    print("=" * 80)
+    
+    statement = (
+        select(Paper.hf_listing_date)
+        .where(Paper.hf_listing_date.is_not(None))
+        .group_by(Paper.hf_listing_date)
+        .order_by(Paper.hf_listing_date.desc())
+    )
+    results = session.exec(statement).all()
+    
+    for i, value in enumerate(results[:20]):
+        text = value if isinstance(value, str) else str(value)
+        normalized = text[:10]
+        print(f"{i+1}. Raw: '{value}' -> Normalized: '{normalized}'")
+--------------

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Daily Paper Insights</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Daily Paper Insights</h1>
+    <p>Summaries and signals from Hugging Face daily arXiv highlights.</p>
+  </header>
+
+  <main>
+    <section id="controls" class="panel controls-panel">
+      <div class="controls-grid">
+        <label for="date-picker">日期</label>
+        <div class="date-input-group">
+          <input type="date" id="date-picker" style="display: none;" />
+          <button type="button" id="date-open" class="calendar-button" aria-label="打开日期选择器">
+            <span id="selected-date-display">选择日期</span>
+            📅
+          </button>
+          <!-- 自定义日历 -->
+          <div id="custom-calendar" class="custom-calendar">
+            <div class="calendar-header">
+              <button type="button" id="calendar-prev-month" class="calendar-nav">‹</button>
+              <div id="calendar-month-year" class="calendar-title">January 2025</div>
+              <button type="button" id="calendar-next-month" class="calendar-nav">›</button>
+            </div>
+            <div id="calendar-grid" class="calendar-grid"></div>
+          </div>
+        </div>
+        <div class="controls-buttons">
+          <button type="button" id="prev-day">前一天</button>
+          <button type="button" id="today">今天</button>
+          <button type="button" id="next-day">后一天</button>
+        </div>
+      </div>
+    </section>
+    <section id="today" class="panel">
+      <h2>Today's Papers</h2>
+      <div id="papers-list" class="card-grid"></div>
+    </section>
+
+    <section id="breakthroughs" class="panel">
+      <h2>Breakthrough Picks</h2>
+      <div id="breakthrough-list" class="card-grid"></div>
+    </section>
+
+    <section id="keywords" class="panel">
+      <h2>Keyword Momentum</h2>
+      <canvas id="keyword-chart" height="200"></canvas>
+      <ul id="keyword-table" class="keyword-table"></ul>
+    </section>
+
+    <section id="subscribe" class="panel">
+      <h2>Subscribe for Daily Brief</h2>
+      <form id="subscribe-form">
+        <label for="email">Email</label>
+        <div class="form-row">
+          <input type="email" id="email" name="email" required placeholder="you@example.com" />
+          <button type="submit">Subscribe</button>
+        </div>
+        <p id="subscribe-feedback" class="feedback"></p>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <p>Powered by automated ingestion, LLM analysis, and your curiosity.</p>
+  </footer>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>

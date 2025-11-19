@@ -20,7 +20,7 @@ class HuggingFaceDailyClient:
             timeout=settings.request_timeout,
             headers={"User-Agent": settings.user_agent},
             follow_redirects=True,
-            proxy=None,  # Disable proxy
+            # proxy 参数留空，让 httpx 自动读取系统环境变量 HTTP_PROXY/HTTPS_PROXY
         )
         self.logger = logging.getLogger("hf")
 

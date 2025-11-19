@@ -1,0 +1,20 @@
+# Daily Paper Insights - Crontab Configuration
+#
+# This crontab runs the daily paper ingestion script every day at 8:00 AM (local time)
+# Edit this file if needed, then install with: crontab scripts/crontab.txt
+
+# 每天早上 8:00 运行数据导入
+0 8 * * * /media/olenet/1tdisk/workfiles/papers/scripts/daily_ingest_cron.sh
+
+# 可选：每周日凌晨 3:00 清理旧日志（保留最近30天）
+# 0 3 * * 0 find /media/olenet/1tdisk/workfiles/papers/backend/logs -name "*.log" -mtime +30 -delete
+
+# 格式说明：
+# 分钟(0-59) 小时(0-23) 日期(1-31) 月份(1-12) 星期(0-7) 命令
+# * 表示任意值
+#
+# 示例：
+# 0 8 * * *   每天 8:00
+# 0 */6 * * * 每 6 小时
+# 0 8 * * 1   每周一 8:00
+# 0 8 1 * *   每月 1 号 8:00

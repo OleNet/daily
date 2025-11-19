@@ -146,33 +146,50 @@ papers/
 
 ## 网络与代理
 
-### Q3: 运行脚本时如何不走系统代理？
+### Q3: 如何配置代理访问 arXiv 和 Hugging Face？
 
-**问题：**系统设置了 SOCKS 代理，但 `daily_ingest.py` 访问 arXiv 和 Hugging Face 时不希望走代理。
+**代理配置说明：**
 
-**解决方案：**
-已在代码中禁用代理：
+httpx 客户端会自动读取系统环境变量 `HTTP_PROXY` 和 `HTTPS_PROXY`。
 
-**`backend/app/services/hf_client.py`：**
-```python
-self.session = httpx.Client(
-    timeout=settings.request_timeout,
-    headers={"User-Agent": settings.user_agent},
-    follow_redirects=True,
-    proxy=None,  # 禁用代理
-)
+**场景 1：使用代理访问国外网站（国内用户推荐）**
+
+```bash
+# HTTP 代理
+export HTTP_PROXY="http://127.0.0.1:7890"
+export HTTPS_PROXY="http://127.0.0.1:7890"
+
+# 或 SOCKS5 代理（需要安装 httpx[socks]）
+export HTTP_PROXY="socks5://127.0.0.1:1080"
+export HTTPS_PROXY="socks5://127.0.0.1:1080"
+
+# 然后运行脚本
+uv run python backend/scripts/daily_ingest.py
 ```
 
-**`backend/app/services/arxiv_fetcher.py`：**
-```python
-self.client = httpx.Client(
-    timeout=settings.request_timeout,
-    headers={"User-Agent": settings.user_agent},
-    proxy=None,  # 禁用代理
-)
+**场景 2：部分服务使用代理（推荐）**
+
+```bash
+# FRP 等本地服务不走代理
+export HTTP_PROXY="http://127.0.0.1:7890"
+export HTTPS_PROXY="http://127.0.0.1:7890"
+export NO_PROXY="localhost,127.0.0.1,192.168.0.0/16,119.23.152.151"
 ```
 
-这样即使系统环境变量设置了 `HTTP_PROXY` 或 `HTTPS_PROXY`，httpx 也会忽略代理设置。
+**场景 3：不使用代理**
+
+```bash
+# 临时禁用代理
+unset HTTP_PROXY
+unset HTTPS_PROXY
+
+# 或
+NO_PROXY="*" uv run python backend/scripts/daily_ingest.py
+```
+
+**代理类型选择：**
+- 如果使用 SOCKS 代理，需要安装：`httpx[socks]`（在 pyproject.toml 中修改依赖）
+- HTTP/HTTPS 代理无需额外依赖
 
 ---
 
@@ -209,9 +226,87 @@ sqlite3 papers.db
 
 ---
 
+### Q5: 如何设置每天自动导入论文数据？
+
+**使用 Cron Job 实现定时任务（推荐）**
+
+项目已包含封装好的 cron 脚本：`scripts/daily_ingest_cron.sh`
+
+**步骤 1：配置代理（如果需要）**
+
+编辑 `scripts/daily_ingest_cron.sh`，取消注释并设置代理：
+
+```bash
+# 如果需要访问 arXiv/Hugging Face，设置代理
+export HTTP_PROXY="http://127.0.0.1:7890"
+export HTTPS_PROXY="http://127.0.0.1:7890"
+```
+
+**步骤 2：安装 crontab**
+
+```bash
+# 查看示例配置
+cat scripts/crontab.txt
+
+# 安装 crontab（每天早上 8:00 运行）
+crontab scripts/crontab.txt
+
+# 查看已安装的任务
+crontab -l
+```
+
+**步骤 3：验证和监控**
+
+```bash
+# 手动测试脚本
+./scripts/daily_ingest_cron.sh
+
+# 查看运行日志
+tail -f backend/logs/daily_ingest_cron.log
+
+# 查看 cron 系统日志
+grep CRON /var/log/syslog  # Ubuntu/Debian
+# 或
+journalctl -u cron         # 使用 systemd 的系统
+```
+
+**Cron 时间配置示例：**
+
+```bash
+# 每天 8:00
+0 8 * * * /path/to/script.sh
+
+# 每天 8:00 和 20:00
+0 8,20 * * * /path/to/script.sh
+
+# 每 6 小时
+0 */6 * * * /path/to/script.sh
+
+# 每周一 8:00
+0 8 * * 1 /path/to/script.sh
+```
+
+**注意事项：**
+- cron 使用的是系统本地时间（非 UTC）
+- 日志文件位于 `backend/logs/daily_ingest_cron.log`
+- 脚本会自动导入昨天的论文（无需指定日期）
+- 如果需要同时发送邮件，确保 FastAPI 服务也在运行（APScheduler 会处理邮件发送）
+
+**调试技巧：**
+
+```bash
+# 临时修改为每分钟运行一次（测试用）
+* * * * * /media/olenet/1tdisk/workfiles/papers/scripts/daily_ingest_cron.sh
+
+# 观察日志确认是否执行
+watch -n 5 tail -10 backend/logs/daily_ingest_cron.log
+```
+
+---
+
 ## 开发调试
 
-### Q5: 如何从其他机器访问本地开发环境？
+### Q6: 如何从其他机器访问本地开发环境？
 
 **启动服务时绑定所有接口：**
 ```bash
@@ -236,7 +331,7 @@ ip addr show
 
 ## 常见错误
 
-### Q6: ImportError: Using SOCKS proxy, but the 'socksio' package is not installed
+### Q7: ImportError: Using SOCKS proxy, but the 'socksio' package is not installed
 
 **原因：**系统配置了 SOCKS 代理，但 httpx 没有安装 SOCKS 支持。
 
@@ -250,7 +345,7 @@ ip addr show
 uv sync
 ```
 
-### Q7: 页面显示"该日期暂无论文摘要"
+### Q8: 页面显示"该日期暂无论文摘要"
 
 **可能原因：**
 1. 数据库为空 → 运行 `daily_ingest.py` 导入数据（见 Q4）
@@ -261,7 +356,7 @@ uv sync
 
 ## 邮件订阅
 
-### Q8: 如何配置邮件订阅功能？
+### Q9: 如何配置邮件订阅功能？
 
 **获取 Brevo API Key：**
 1. 注册 Brevo 账号：https://app.brevo.com

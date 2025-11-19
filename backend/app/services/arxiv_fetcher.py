@@ -28,7 +28,7 @@ class ArxivFetcher:
         self.client = httpx.Client(
             timeout=settings.request_timeout,
             headers={"User-Agent": settings.user_agent},
-            proxy=None,  # Disable proxy
+            # proxy 参数留空，让 httpx 自动读取系统环境变量 HTTP_PROXY/HTTPS_PROXY
         )
         self.logger = logging.getLogger("arxiv_fetcher")
 

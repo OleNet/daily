@@ -25,7 +25,11 @@ class ArxivFetchError(Exception):
 
 class ArxivFetcher:
     def __init__(self) -> None:
-        self.client = httpx.Client(timeout=settings.request_timeout, headers={"User-Agent": settings.user_agent})
+        self.client = httpx.Client(
+            timeout=settings.request_timeout,
+            headers={"User-Agent": settings.user_agent},
+            proxy=None,  # Disable proxy
+        )
         self.logger = logging.getLogger("arxiv_fetcher")
 
     def close(self) -> None:

@@ -29,7 +29,8 @@ uv run uvicorn app.main:app --reload --app-dir backend
 Create a `.env` file in the `backend/` directory (see `.env.example` for template):
 
 ```
-DATABASE_URL=sqlite:///./papers.db
+# DATABASE_URL is auto-configured to project_root/papers.db (can be overridden here if needed)
+# DATABASE_URL=sqlite:///./papers.db
 DEEPSEEK_API_KEY=sk-...
 DEEPSEEK_MODEL=deepseek-chat
 DEEPSEEK_BASE_URL=https://api.deepseek.com
@@ -45,6 +46,7 @@ DAILY_DIGEST_HOUR=8
 ```
 
 **Configuration Notes:**
+- **Database:** The database file (`papers.db`) is automatically created in the project root directory. This separates data from code for easier backup and deployment flexibility
 - If `DEEPSEEK_API_KEY` is omitted, the LLM client falls back to heuristics (less detailed but functional)
 - If `BREVO_API_KEY` is omitted, email features are disabled (subscribers can still register but won't receive emails)
 - Get Brevo API key from: https://app.brevo.com/settings/keys/api (free tier: 300 emails/day)
@@ -108,7 +110,7 @@ To disable automatic sending, comment out `start_scheduler()` in `app/main.py`.
 3. **Verify email manually** (for testing without Brevo):
    ```bash
    # Get token from database
-   sqlite3 backend/papers.db "SELECT verify_token FROM subscriber WHERE email='test@example.com';"
+   sqlite3 papers.db "SELECT verify_token FROM subscriber WHERE email='test@example.com';"
 
    # Visit verification URL
    curl "http://localhost:8000/api/subscribers/verify?token=TOKEN_HERE"
@@ -190,7 +192,7 @@ uv run python backend/scripts/daily_ingest.py --limit 10 --debug
 uv run python backend/scripts/daily_ingest.py --date 2024-10-20
 
 # Check database
-sqlite3 backend/papers.db
+sqlite3 papers.db
 # sqlite> .tables
 # sqlite> SELECT arxiv_id, title, breakthrough_score FROM paper LIMIT 5;
 
@@ -218,7 +220,7 @@ tail -f backend/logs/daily_ingest.log
 
 ## Important Notes
 
-- The database is SQLite by default (`papers.db` in backend directory)
+- The database is SQLite by default (`papers.db` in project root directory, separate from code for easier backup and deployment)
 - Frontend is served at `/dashboard` by the FastAPI app itself (no separate web server needed)
 - LLM analysis is synchronous and can be slow; consider adding async task queue (Celery/RQ) for production
 - **Email System:**

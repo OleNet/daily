@@ -11,7 +11,11 @@ if ENV_PATH.exists():
 
 class Settings:
     def __init__(self) -> None:
-        self.database_url = os.getenv("DATABASE_URL", "sqlite:///./papers.db")
+        # Default database path: project_root/papers.db
+        project_root = Path(__file__).resolve().parents[3]  # Up to project root
+        default_db_path = project_root / "papers.db"
+        default_db_url = f"sqlite:///{default_db_path}"
+        self.database_url = os.getenv("DATABASE_URL", default_db_url)
         self.database_echo = os.getenv("DATABASE_ECHO", "0") == "1"
         self.hf_daily_url = os.getenv(
             "HF_DAILY_URL", "https://huggingface.co/papers/date/"

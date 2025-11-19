@@ -1,4 +1,4 @@
-const API_BASE = window.__API_BASE__ || 'http://localhost:8000/api';
+const API_BASE = window.__API_BASE__ || '/api';
 
 function normalizeDateString(value) {
   if (!value) return null;

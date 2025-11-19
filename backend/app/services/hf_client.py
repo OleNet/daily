@@ -20,6 +20,7 @@ class HuggingFaceDailyClient:
             timeout=settings.request_timeout,
             headers={"User-Agent": settings.user_agent},
             follow_redirects=True,
+            proxy=None,  # Disable proxy
         )
         self.logger = logging.getLogger("hf")
 

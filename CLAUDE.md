@@ -66,9 +66,13 @@ uv run python backend/scripts/daily_ingest.py  # ingest yesterday's papers
 uv run python backend/scripts/daily_ingest.py --limit 5  # test with 5 papers
 uv run python backend/scripts/daily_ingest.py --date 2024-10-24  # ingest specific date
 uv run python backend/scripts/daily_ingest.py --debug  # enable verbose logging
+uv run python backend/scripts/daily_ingest.py --force-update  # force re-analysis of existing papers
+uv run python backend/scripts/daily_ingest.py --date 2024-10-24 --force-update  # re-analyze specific date
 ```
 
 The script fetches papers from Hugging Face's daily page for the specified date, retrieves full content from arXiv, analyzes with LLM, and stores in SQLite. Logs are written to `backend/logs/daily_ingest.log`.
+
+**Note:** The `--force-update` flag will delete and re-ingest existing papers for the target date, including all associated findings. This is useful when you've updated the LLM prompts or want to refresh the analysis.
 
 ## Email Subscription System
 

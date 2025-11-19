@@ -82,15 +82,26 @@ def upsert_keywords(session, keywords: Iterable[str]) -> None:
             session.add(KeywordStat(keyword=keyword, paper_count=1))
 
 
-def ingest_paper(arxiv_id: str, fetcher: ArxivFetcher, listing_date: date) -> None:
+def ingest_paper(arxiv_id: str, fetcher: ArxivFetcher, listing_date: date, force_update: bool = False) -> None:
     #import pdb
     #pdb.set_trace()
     with session_scope() as session:
         existing = session.exec(select(Paper).where(Paper.arxiv_id == arxiv_id)).first()
         if existing:
-            console.print(f"[yellow]Skipping existing paper {arxiv_id}")
-            logger.info("Skipping existing paper %s", arxiv_id)
-            return
+            if not force_update:
+                console.print(f"[yellow]Skipping existing paper {arxiv_id}")
+                logger.info("Skipping existing paper %s", arxiv_id)
+                return
+            else:
+                # Delete existing paper and its findings for force update
+                console.print(f"[cyan]Force updating existing paper {arxiv_id}")
+                logger.info("Force updating existing paper %s", arxiv_id)
+                # Delete associated findings first (foreign key constraint)
+                findings = session.exec(select(Finding).where(Finding.paper_id == existing.id)).all()
+                for finding in findings:
+                    session.delete(finding)
+                session.delete(existing)
+                session.commit()
 
     paper_data = fetcher.fetch(arxiv_id)
     logger.info(
@@ -149,14 +160,16 @@ def ingest_paper(arxiv_id: str, fetcher: ArxivFetcher, listing_date: date) -> No
         logger.info("Stored paper %s with %d findings", arxiv_id, len(analysis.findings))
 
 
-def run_ingest(limit: int | None = None, target_date: date | None = None, debug: bool = False) -> None:
+def run_ingest(limit: int | None = None, target_date: date | None = None, debug: bool = False, force_update: bool = False) -> None:
     configure_logging(debug=debug)
     init_db()
     ensure_storage_dirs(Path("storage"))
     if target_date is None:
         target_date = (datetime.utcnow() - timedelta(days=1)).date()
     console.print(f"[cyan]Fetching Hugging Face daily list for {target_date.isoformat()}[/cyan]")
-    logger.info("Starting ingest for %s", target_date.isoformat())
+    if force_update:
+        console.print("[magenta]Force update mode enabled - will re-analyze existing papers[/magenta]")
+    logger.info("Starting ingest for %s (force_update=%s)", target_date.isoformat(), force_update)
     identifiers = fetch_daily_identifiers(target_date)
     if limit:
         identifiers = identifiers[:limit]
@@ -171,7 +184,7 @@ def run_ingest(limit: int | None = None, target_date: date | None = None, debug:
             task = progress.add_task("Ingesting papers", total=len(identifiers))
             for arxiv_id in identifiers:
                 try:
-                    ingest_paper(arxiv_id, fetcher, listing_date=target_date)
+                    ingest_paper(arxiv_id, fetcher, listing_date=target_date, force_update=force_update)
                 except Exception as exc:  # noqa: BLE001
                     console.print(f"[red]Failed to ingest {arxiv_id}: {exc}")
                     logger.exception("Failed to ingest %s", arxiv_id)
@@ -192,6 +205,11 @@ if __name__ == "__main__":
         help="Target date in YYYY-MM-DD (defaults to yesterday UTC)",
     )
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging")
+    parser.add_argument(
+        "--force-update",
+        action="store_true",
+        help="Force re-analysis of existing papers (will delete and re-ingest)",
+    )
     args = parser.parse_args()
     target = None
     if args.date:
@@ -199,4 +217,4 @@ if __name__ == "__main__":
             target = datetime.strptime(args.date, "%Y-%m-%d").date()
         except ValueError:
             parser.error(f"Invalid date format: {args.date}. Use YYYY-MM-DD.")
-    run_ingest(limit=args.limit, target_date=target, debug=args.debug)
+    run_ingest(limit=args.limit, target_date=target, debug=args.debug, force_update=args.force_update)

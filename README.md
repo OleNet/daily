@@ -13,13 +13,28 @@ An automated pipeline that ingests the Hugging Face daily paper feed, fetches fu
 
 ## Getting Started
 
-```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+This project uses [uv](https://docs.astral.sh/uv/) for fast, reliable dependency management.
 
-# run API (serves dashboard at http://localhost:8000/dashboard)
-uvicorn app.main:app --reload
+### Installation
+
+First, install uv if you haven't already:
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+### Setup and Run
+
+```bash
+# Install dependencies (creates .venv automatically)
+uv sync
+
+# Run API (serves dashboard at http://localhost:8000/dashboard)
+uv run uvicorn app.main:app --reload --app-dir backend
 ```
 
 Create a `.env` file at the repository root when you want to customise behaviour:
@@ -39,8 +54,7 @@ If `DEEPSEEK_API_KEY` is omitted the summariser falls back to heuristics (less d
 
 ```bash
 # optional: limit number of papers during testing
-cd backend
-python scripts/daily_ingest.py --limit 5
+uv run python backend/scripts/daily_ingest.py --limit 5
 ```
 
 Schedule this script with cron, GitHub Actions, or any workflow orchestrator. The script:

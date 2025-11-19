@@ -8,14 +8,20 @@ Daily Paper Insights is an automated pipeline that ingests papers from Hugging F
 
 ## Development Setup
 
+This project uses [uv](https://docs.astral.sh/uv/) for fast, reliable dependency management.
+
 ```bash
-# Backend setup
-cd backend
-python -m venv .venv && source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+# Install uv (if not already installed)
+# macOS/Linux:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows:
+# powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Install dependencies (creates .venv automatically)
+uv sync
 
 # Run the API server (serves dashboard at http://localhost:8000/dashboard)
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --app-dir backend
 ```
 
 ## Environment Configuration
@@ -47,21 +53,19 @@ DAILY_DIGEST_HOUR=8
 ## Running Tests
 
 ```bash
-cd backend
-pytest
-pytest -v  # verbose output
-pytest tests/test_models/  # run specific test directory
-pytest tests/test_models/test_entities.py  # run specific test file
+uv run pytest backend
+uv run pytest backend -v  # verbose output
+uv run pytest backend/tests/test_models/  # run specific test directory
+uv run pytest backend/tests/test_models/test_entities.py  # run specific test file
 ```
 
 ## Daily Ingestion Pipeline
 
 ```bash
-cd backend
-python scripts/daily_ingest.py  # ingest yesterday's papers
-python scripts/daily_ingest.py --limit 5  # test with 5 papers
-python scripts/daily_ingest.py --date 2024-10-24  # ingest specific date
-python scripts/daily_ingest.py --debug  # enable verbose logging
+uv run python backend/scripts/daily_ingest.py  # ingest yesterday's papers
+uv run python backend/scripts/daily_ingest.py --limit 5  # test with 5 papers
+uv run python backend/scripts/daily_ingest.py --date 2024-10-24  # ingest specific date
+uv run python backend/scripts/daily_ingest.py --debug  # enable verbose logging
 ```
 
 The script fetches papers from Hugging Face's daily page for the specified date, retrieves full content from arXiv, analyzes with LLM, and stores in SQLite. Logs are written to `backend/logs/daily_ingest.log`.
@@ -71,12 +75,11 @@ The script fetches papers from Hugging Face's daily page for the specified date,
 ### Sending Daily Digest Emails
 
 ```bash
-cd backend
-python scripts/send_daily_digest.py                    # Send yesterday's papers
-python scripts/send_daily_digest.py --date 2024-10-24  # Send specific date
-python scripts/send_daily_digest.py --limit 5          # Test with 5 subscribers
-python scripts/send_daily_digest.py --breakthrough-only # Only breakthrough papers
-python scripts/send_daily_digest.py --debug            # Enable verbose logging
+uv run python backend/scripts/send_daily_digest.py                    # Send yesterday's papers
+uv run python backend/scripts/send_daily_digest.py --date 2024-10-24  # Send specific date
+uv run python backend/scripts/send_daily_digest.py --limit 5          # Test with 5 subscribers
+uv run python backend/scripts/send_daily_digest.py --breakthrough-only # Only breakthrough papers
+uv run python backend/scripts/send_daily_digest.py --debug            # Enable verbose logging
 ```
 
 The script sends digest emails to all verified subscribers. Logs are written to `backend/logs/send_daily_digest.log`.
@@ -176,18 +179,16 @@ Static HTML/CSS/JS dashboard served by FastAPI:
 
 ```bash
 # Start development server with auto-reload
-cd backend
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --app-dir backend
 
 # Run ingestion with different options
-python scripts/daily_ingest.py --limit 10 --debug
-python scripts/daily_ingest.py --date 2024-10-20
+uv run python backend/scripts/daily_ingest.py --limit 10 --debug
+uv run python backend/scripts/daily_ingest.py --date 2024-10-20
 
 # Check database
-cd backend
-sqlite3 papers.db
-sqlite> .tables
-sqlite> SELECT arxiv_id, title, breakthrough_score FROM paper LIMIT 5;
+sqlite3 backend/papers.db
+# sqlite> .tables
+# sqlite> SELECT arxiv_id, title, breakthrough_score FROM paper LIMIT 5;
 
 # View logs
 tail -f backend/logs/daily_ingest.log

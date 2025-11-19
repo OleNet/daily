@@ -1,0 +1,26 @@
+[Unit]
+Description=Daily Paper Insights - FastAPI Server
+After=network.target
+
+[Service]
+Type=simple
+User=olenet
+WorkingDirectory=/media/olenet/1tdisk/workfiles/papers
+# 使用 uv run 启动 uvicorn（生产模式，不使用 --reload）
+ExecStart=/home/olenet/anaconda3/bin/uv run uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5s
+
+# 环境变量（如果需要代理）
+# Environment="HTTP_PROXY=http://127.0.0.1:7890"
+# Environment="HTTPS_PROXY=http://127.0.0.1:7890"
+
+# 资源限制
+LimitNOFILE=65535
+
+# 日志输出
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

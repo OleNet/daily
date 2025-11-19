@@ -329,9 +329,75 @@ ip addr show
 
 ---
 
+### Q7: 如何让服务器在后台运行（SSH 退出后继续运行）？
+
+**方案 1: systemd service（推荐 - 生产环境）**
+
+类似 frpc 服务，使用 systemd 管理，最稳定专业：
+
+```bash
+# 安装服务
+sudo cp scripts/papers.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable papers  # 开机自动启动
+sudo systemctl start papers   # 启动服务
+
+# 管理服务
+sudo systemctl status papers   # 查看状态
+sudo systemctl restart papers  # 重启
+sudo systemctl stop papers     # 停止
+
+# 查看日志
+sudo journalctl -u papers -f  # 实时日志
+sudo journalctl -u papers -n 50  # 最近 50 行
+```
+
+**优点：**
+- ✅ 开机自动启动
+- ✅ 崩溃自动重启
+- ✅ 统一日志管理
+- ✅ 和 frpc 一样的管理方式
+
+**方案 2: 使用 start_server.sh 脚本（快速简单）**
+
+```bash
+# 后台启动（使用 nohup）
+./start_server.sh daemon
+
+# 查看日志
+tail -f backend/logs/server.log
+
+# 停止服务
+./start_server.sh stop
+
+# 其他模式
+./start_server.sh dev    # 开发模式（前台，带热重载）
+./start_server.sh prod   # 生产模式（前台，4个worker）
+```
+
+**方案 3: screen/tmux（开发调试）**
+
+```bash
+# 使用 screen
+screen -S papers
+./start_server.sh dev
+# 按 Ctrl+A 然后按 D 分离
+# 重新连接：screen -r papers
+
+# 使用 tmux
+tmux new -s papers
+./start_server.sh dev
+# 按 Ctrl+B 然后按 D 分离
+# 重新连接：tmux attach -t papers
+```
+
+**详细说明见：** `scripts/INSTALL_SERVICE.md`
+
+---
+
 ## 常见错误
 
-### Q7: ImportError: Using SOCKS proxy, but the 'socksio' package is not installed
+### Q8: ImportError: Using SOCKS proxy, but the 'socksio' package is not installed
 
 **原因：**系统配置了 SOCKS 代理，但 httpx 没有安装 SOCKS 支持。
 
@@ -345,7 +411,7 @@ ip addr show
 uv sync
 ```
 
-### Q8: 页面显示"该日期暂无论文摘要"
+### Q9: 页面显示"该日期暂无论文摘要"
 
 **可能原因：**
 1. 数据库为空 → 运行 `daily_ingest.py` 导入数据（见 Q4）
@@ -356,7 +422,7 @@ uv sync
 
 ## 邮件订阅
 
-### Q9: 如何配置邮件订阅功能？
+### Q10: 如何配置邮件订阅功能？
 
 **获取 Brevo API Key：**
 1. 注册 Brevo 账号：https://app.brevo.com

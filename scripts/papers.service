@@ -19,8 +19,13 @@ RestartSec=5s
 LimitNOFILE=65535
 
 # 日志输出
+# 选项 1: 只输出到 systemd journal（默认）
 StandardOutput=journal
 StandardError=journal
+
+# 选项 2: 输出到文本文件（取消下面两行的注释并注释掉上面两行）
+# StandardOutput=append:/media/olenet/1tdisk/workfiles/papers/backend/logs/papers.log
+# StandardError=append:/media/olenet/1tdisk/workfiles/papers/backend/logs/papers_error.log
 
 [Install]
 WantedBy=multi-user.target

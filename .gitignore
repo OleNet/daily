@@ -53,6 +53,7 @@ logs/
 
 # macOS
 .DS_Store
+._*
 
 # Testing
 .pytest_cache/
@@ -61,3 +62,6 @@ htmlcov/
 
 # uv
 .uv/
+
+# Claude Code
+.claude/

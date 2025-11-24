@@ -12,8 +12,8 @@ LOG_FILE="$LOG_DIR/daily_ingest_cron.log"
 
 # 设置代理（如果需要访问 arXiv/Hugging Face）
 # 取消下面的注释并修改为你的代理地址
-# export HTTP_PROXY="http://127.0.0.1:7890"
-# export HTTPS_PROXY="http://127.0.0.1:7890"
+export HTTP_PROXY="http://127.0.0.1:7890"
+export HTTPS_PROXY="http://127.0.0.1:7890"
 
 # 记录开始时间
 echo "=== Daily Ingest Started at $(date) ===" >> "$LOG_FILE"

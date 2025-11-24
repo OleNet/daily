@@ -102,11 +102,9 @@ function renderPaper(paper) {
   return card;
 }
 
-function populatePaperLists(papers, breakthroughs) {
+function populatePaperLists(papers) {
   const paperContainer = document.getElementById('papers-list');
-  const breakthroughContainer = document.getElementById('breakthrough-list');
   paperContainer.textContent = '';
-  breakthroughContainer.textContent = '';
 
   if (papers.length === 0) {
     const empty = document.createElement('p');
@@ -116,17 +114,6 @@ function populatePaperLists(papers, breakthroughs) {
   } else {
     papers.forEach((paper) => {
       paperContainer.appendChild(renderPaper(paper));
-    });
-  }
-
-  if (breakthroughs.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'meta';
-    empty.textContent = 'No breakthrough papers flagged today.';
-    breakthroughContainer.appendChild(empty);
-  } else {
-    breakthroughs.forEach((paper) => {
-      breakthroughContainer.appendChild(renderPaper(paper));
     });
   }
 }
@@ -168,12 +155,11 @@ function renderKeywordStats(stats) {
 
 async function loadDashboard() {
   try {
-    const [papers, breakthroughs, keywordStats] = await Promise.all([
+    const [papers, keywordStats] = await Promise.all([
       fetchJSON(buildPaperQuery({ limit: 12, targetDate: currentDate || undefined })),
-      fetchJSON(buildPaperQuery({ limit: 6, breakthroughOnly: true, targetDate: currentDate || undefined })),
       fetchJSON('/keywords/stats'),
     ]);
-    populatePaperLists(papers, breakthroughs);
+    populatePaperLists(papers);
     renderKeywordStats(keywordStats);
     updateNavigationState();
   } catch (error) {

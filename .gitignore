@@ -65,3 +65,13 @@ htmlcov/
 
 # Claude Code
 .claude/
+
+# Documentation and temporary files
+CALENDAR_UPGRADE.md
+CLAUDE.md
+DATE_FIX_REPORT.md
+QUICKSTART_EMAIL.md
+all_frontend_files.txt
+all_python_files.txt
+debug_dates.py
+restore_files.py
